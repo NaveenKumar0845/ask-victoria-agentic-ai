@@ -1,8 +1,8 @@
 from src.data import load_products, load_reviews
-from src.evaluation import groundedness_score, retrieval_summary
-from src.graph import RETRIEVER, ask_victoria, route_intent
+from src.evaluation import groundedness_score, recommendation_summary, retrieval_summary
+from src.graph import RETRIEVER, TOOLS, ask_victoria, route_intent
 from src.guardrails import check_input, redact_pii
-from src.intelligence import summarize_reviews
+from src.intelligence import infer_query_aspects, summarize_reviews
 from src.retrieval import extract_constraints
 
 
@@ -25,6 +25,16 @@ def test_review_summary():
     s = summarize_reviews(reviews[reviews["product_id"] == pid])
     assert s["review_count"] == 20
     assert s["average_rating"] > 0
+    assert s["aspect_scores"]
+    assert s["fit_signal"]["label"]
+    assert 0.0 <= s["confidence"] <= 1.0
+
+
+def test_query_aspects():
+    aspects = infer_query_aspects("I want something soft, comfortable and supportive for yoga")
+    assert "comfort" in aspects
+    assert "support" in aspects
+    assert "activity" in aspects
 
 
 def test_router():
@@ -45,10 +55,28 @@ def test_hybrid_vector_retrieval():
     assert not hits.empty
     assert "semantic_score" in hits.columns
     assert "lexical_score" in hits.columns
+    assert "structured_score" in hits.columns
     assert "AV1001" in hits["product_id"].tolist()
     summary = retrieval_summary(RETRIEVER, top_k=3)
     assert 0.0 <= summary["recall@3"] <= 1.0
     assert 0.0 <= summary["top_1_accuracy"] <= 1.0
+    assert 0.0 <= summary["mrr"] <= 1.0
+
+
+def test_explainable_recommendation_engine():
+    products, evidence = TOOLS.recommend_products(
+        "Recommend a soft comfortable black yoga bra under ₹2000",
+        top_k=3,
+    )
+    assert products
+    assert evidence
+    assert products[0].get("recommendation_score") is not None
+    assert products[0].get("recommendation_reasons")
+    assert 0.0 <= products[0]["recommendation_score"] <= 100.0
+    summary = recommendation_summary(TOOLS.recommend_products, top_k=3)
+    assert 0.0 <= summary["recall@3"] <= 1.0
+    assert 0.0 <= summary["top_1_accuracy"] <= 1.0
+    assert 0.0 <= summary["mrr"] <= 1.0
 
 
 def test_guardrails_block_prompt_injection_and_medical_claims():
@@ -77,6 +105,7 @@ def test_end_to_end_recommendation():
     assert result["intent"] == "recommendation"
     assert result["selected_product_ids"]
     assert result["trace"]
+    assert result["products"][0].get("recommendation_score") is not None
 
 
 def test_context_follow_up():
