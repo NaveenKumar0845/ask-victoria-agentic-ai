@@ -27,7 +27,7 @@ st.markdown(
 
 st.markdown(
     '<div class="hero"><h1>✨ Ask Victoria</h1><p><b>Agentic Product Intelligence & Conversational Commerce Platform</b></p>'
-    '<p class="small">LangGraph routing • hybrid vector retrieval • product + review tools • memory • guardrails • judge/self-correction • evaluation</p>'
+    '<p class="small">LangGraph routing • constraint-aware hybrid vector retrieval • product + review tools • memory • guardrails • judge/self-correction • evaluation</p>'
     '<p class="small">Independent portfolio demo using synthetic retail data. Not affiliated with Victoria\'s Secret.</p></div>',
     unsafe_allow_html=True,
 )
@@ -183,16 +183,20 @@ with eval_tab:
     retrieval_df = evaluate_retrieval(RETRIEVER, top_k=3)
     retrieval_metrics = retrieval_summary(RETRIEVER, top_k=3)
 
-    a, b, c, d = st.columns(4)
+    a, b, c, d, e = st.columns(5)
     a.metric("Router accuracy", f"{routing_accuracy:.0%}")
     b.metric("Retrieval Recall@3", f"{retrieval_metrics['recall@3']:.0%}")
     c.metric("Retrieval Top-1", f"{retrieval_metrics['top_1_accuracy']:.0%}")
-    d.metric("Safety layers", "3")
+    d.metric("Retrieval MRR", f"{retrieval_metrics['mrr']:.0%}")
+    e.metric("Safety layers", "3")
+    st.caption(
+        f"Retrieval benchmark: {retrieval_metrics['cases']} deterministic cases spanning product categories, colors, materials, support levels and activities."
+    )
 
     st.markdown("#### Router evaluation")
     st.dataframe(router_df, hide_index=True, use_container_width=True)
 
-    st.markdown("#### Hybrid vector retrieval evaluation")
+    st.markdown("#### Constraint-aware hybrid retrieval evaluation")
     st.caption(RETRIEVER.retrieval_mode)
     st.dataframe(retrieval_df, hide_index=True, use_container_width=True)
 
@@ -246,8 +250,8 @@ Product Agent   Review Agent   Recommendation / Comparison Agent
  │       │                       │
  └───────┴──────────┬────────────┘
                     ▼
-        Hybrid Vector Retrieval
-         TF-IDF + Dense LSA
+       Constraint-Aware Retrieval
+   Filters + TF-IDF + Dense LSA + Rerank
                     │
                     ▼
             Product + Review Tools
@@ -274,7 +278,7 @@ Product Agent   Review Agent   Recommendation / Comparison Agent
 
 - Conditional LangGraph routing chooses a workflow from user intent.
 - Specialized agents call product/review intelligence tools rather than relying on model memory.
-- Hybrid retrieval combines lexical relevance with dense latent-semantic vector similarity.
+- Retrieval combines commerce constraints, lexical relevance, dense latent-semantic similarity and structured reranking.
 - Session state carries active-product context into follow-up turns.
 - Input/output guardrails gate unsafe or unsupported requests.
 - A judge node evaluates the answer and can route into a self-correction path.
@@ -284,6 +288,6 @@ Product Agent   Review Agent   Recommendation / Comparison Agent
 
 st.divider()
 st.caption(
-    "Zero-cost base architecture: Streamlit + LangGraph + scikit-learn hybrid vector retrieval + synthetic product/review data. "
+    "Zero-cost base architecture: Streamlit + LangGraph + scikit-learn constraint-aware hybrid vector retrieval + synthetic product/review data. "
     "Gemini is optional; no paid API is required for the live demo."
 )
