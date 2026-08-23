@@ -4,8 +4,15 @@ import pandas as pd
 import streamlit as st
 
 from src.data import load_products, load_reviews
-from src.evaluation import ROUTER_TESTS, evaluate_retrieval, evaluate_router, retrieval_summary
-from src.graph import RETRIEVER, ask_victoria, route_intent
+from src.evaluation import (
+    ROUTER_TESTS,
+    evaluate_recommendations,
+    evaluate_retrieval,
+    evaluate_router,
+    recommendation_summary,
+    retrieval_summary,
+)
+from src.graph import RETRIEVER, TOOLS, ask_victoria, route_intent
 from src.guardrails import check_input
 from src.intelligence import summarize_reviews
 from src.llm import DEFAULT_MODEL
@@ -27,7 +34,7 @@ st.markdown(
 
 st.markdown(
     '<div class="hero"><h1>✨ Ask Victoria</h1><p><b>Agentic Product Intelligence & Conversational Commerce Platform</b></p>'
-    '<p class="small">LangGraph routing • constraint-aware hybrid vector retrieval • product + review tools • memory • guardrails • judge/self-correction • evaluation</p>'
+    '<p class="small">LangGraph routing • hybrid vector retrieval • aspect-level review intelligence • explainable recommendation ranking • memory • guardrails • judge/self-correction • evaluation</p>'
     '<p class="small">Independent portfolio demo using synthetic retail data. Not affiliated with Victoria\'s Secret.</p></div>',
     unsafe_allow_html=True,
 )
@@ -58,6 +65,8 @@ with st.sidebar:
     st.write(f"**Material:** {p['material']}")
     st.write(f"**Support:** {p['support']}")
     st.write(f"**Padding:** {p['padding']}")
+    st.write(f"**Fit signal:** {summary['fit_signal']['label']}")
+    st.write(f"**Review confidence:** {summary['confidence']:.0%}")
     st.divider()
     st.caption("Knowledge base")
     k1, k2 = st.columns(2)
@@ -93,20 +102,29 @@ with assistant_tab:
 
         st.markdown("#### Aspect intelligence")
         aspect_rows = []
-        for aspect, counts in summary["aspects"].items():
-            total = sum(counts.values())
-            pos = counts.get("positive", 0)
-            neg = counts.get("negative", 0)
+        for aspect, details in summary.get("aspect_scores", {}).items():
             aspect_rows.append(
                 {
                     "Aspect": aspect.title(),
-                    "Mentions": total,
-                    "Positive %": round(100 * pos / total) if total else 0,
-                    "Negative %": round(100 * neg / total) if total else 0,
+                    "Mentions": details["mentions"],
+                    "Positive-equivalent %": round(100 * details["positive_rate"]),
+                    "Evidence confidence %": round(100 * details["confidence"]),
+                    "Negative mentions": details["negative"],
                 }
             )
         if aspect_rows:
-            st.dataframe(pd.DataFrame(aspect_rows), hide_index=True, use_container_width=True)
+            aspect_df = pd.DataFrame(aspect_rows).sort_values(["Mentions", "Positive-equivalent %"], ascending=[False, False])
+            st.dataframe(aspect_df, hide_index=True, use_container_width=True)
+
+        with st.expander("Representative review evidence"):
+            quote_map = summary.get("representative_quotes", {})
+            if quote_map:
+                for aspect, quotes in quote_map.items():
+                    st.markdown(f"**{aspect.title()}**")
+                    for quote in quotes:
+                        st.write(f"• {quote}")
+            else:
+                st.caption("No representative quotes available for the current product.")
 
         with st.expander("Session memory"):
             st.json(st.session_state.memory)
@@ -161,6 +179,28 @@ with assistant_tab:
                 q3.metric("Grounding", f"{result.get('groundedness_score', 1.0 if result.get('blocked') else 0.0):.0%}")
                 q4.metric("Latency", f"{result.get('latency_ms', 0):.0f} ms")
 
+                if result.get("intent") == "recommendation" and result.get("products"):
+                    with st.expander("Explainable recommendation score breakdown"):
+                        rec_rows = []
+                        for product in result["products"][:3]:
+                            if product.get("recommendation_score") is None:
+                                continue
+                            rec_rows.append(
+                                {
+                                    "Product": product["name"],
+                                    "Score / 100": product["recommendation_score"],
+                                    "Retrieval": round(100 * product.get("retrieval_component", 0)),
+                                    "Review aspects": round(100 * product.get("aspect_component", 0)),
+                                    "Rating": round(100 * product.get("rating_component", 0)),
+                                    "Evidence confidence": round(100 * product.get("confidence_component", 0)),
+                                    "Value": round(100 * product.get("value_component", 0)),
+                                    "Fit signal": product.get("fit_signal", ""),
+                                }
+                            )
+                        if rec_rows:
+                            st.dataframe(pd.DataFrame(rec_rows), hide_index=True, use_container_width=True)
+                        st.caption("Ranking weights: 42% retrieval, 25% requested review aspects, 15% rating, 10% review confidence, 8% value/price fit.")
+
                 with st.expander("Agent execution trace"):
                     st.caption(RETRIEVER.retrieval_mode)
                     for step, trace in enumerate(result.get("trace", []), start=1):
@@ -174,14 +214,16 @@ with assistant_tab:
 with eval_tab:
     st.subheader("Transparent evaluation harness")
     st.write(
-        "The portfolio version exposes measurable routing, retrieval and safety behavior instead of claiming unverified performance. "
-        "The groundedness score shown in the demo is a transparent lexical proxy, not a production factuality benchmark."
+        "The portfolio version exposes measurable routing, retrieval, recommendation and safety behavior instead of claiming unverified production performance. "
+        "All displayed benchmark metrics use the controlled public-safe synthetic catalogue and review corpus."
     )
 
     router_df = evaluate_router(route_intent)
     routing_accuracy = float(router_df["correct"].mean()) if len(router_df) else 0.0
     retrieval_df = evaluate_retrieval(RETRIEVER, top_k=3)
     retrieval_metrics = retrieval_summary(RETRIEVER, top_k=3)
+    recommendation_df = evaluate_recommendations(TOOLS.recommend_products, top_k=3)
+    recommendation_metrics = recommendation_summary(TOOLS.recommend_products, top_k=3)
 
     a, b, c, d, e = st.columns(5)
     a.metric("Router accuracy", f"{routing_accuracy:.0%}")
@@ -189,9 +231,12 @@ with eval_tab:
     c.metric("Retrieval Top-1", f"{retrieval_metrics['top_1_accuracy']:.0%}")
     d.metric("Retrieval MRR", f"{retrieval_metrics['mrr']:.0%}")
     e.metric("Safety layers", "3")
-    st.caption(
-        f"Retrieval benchmark: {retrieval_metrics['cases']} deterministic cases spanning product categories, colors, materials, support levels and activities."
-    )
+
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Recommendation Recall@3", f"{recommendation_metrics['recall@3']:.0%}")
+    r2.metric("Recommendation Top-1", f"{recommendation_metrics['top_1_accuracy']:.0%}")
+    r3.metric("Recommendation MRR", f"{recommendation_metrics['mrr']:.0%}")
+    r4.metric("Recommendation cases", recommendation_metrics["cases"])
 
     st.markdown("#### Router evaluation")
     st.dataframe(router_df, hide_index=True, use_container_width=True)
@@ -199,6 +244,10 @@ with eval_tab:
     st.markdown("#### Constraint-aware hybrid retrieval evaluation")
     st.caption(RETRIEVER.retrieval_mode)
     st.dataframe(retrieval_df, hide_index=True, use_container_width=True)
+
+    st.markdown("#### Explainable recommendation evaluation")
+    st.caption("This benchmark evaluates the ranking layer after retrieval, including review-sensitive queries about comfort/support/fit and value.")
+    st.dataframe(recommendation_df, hide_index=True, use_container_width=True)
 
     st.markdown("#### Adversarial / safety checks")
     safety_queries = [
@@ -250,14 +299,19 @@ Product Agent   Review Agent   Recommendation / Comparison Agent
  │       │                       │
  └───────┴──────────┬────────────┘
                     ▼
-       Constraint-Aware Retrieval
-   Filters + TF-IDF + Dense LSA + Rerank
+        Constraint-aware Retrieval
+     TF-IDF + Dense LSA + Reranking
                     │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+   Product Evidence    Review Intelligence
+                       Aspect sentiment
+                       Fit signal / quotes
+          │                   │
+          └─────────┬─────────┘
                     ▼
-            Product + Review Tools
-                    │
-                    ▼
-              Evidence Context
+       Explainable Recommendation Ranker
+ retrieval + aspects + rating + confidence + value
                     │
                     ▼
                Answer Agent
@@ -278,16 +332,18 @@ Product Agent   Review Agent   Recommendation / Comparison Agent
 
 - Conditional LangGraph routing chooses a workflow from user intent.
 - Specialized agents call product/review intelligence tools rather than relying on model memory.
-- Retrieval combines commerce constraints, lexical relevance, dense latent-semantic similarity and structured reranking.
+- Constraint-aware hybrid retrieval combines lexical relevance, dense latent-semantic similarity and structured commerce fields.
+- Review intelligence aggregates aspect sentiment, fit signals, evidence confidence and representative review quotes.
+- Recommendation ranking combines retrieval relevance with requested review aspects, rating, evidence confidence and value fit.
 - Session state carries active-product context into follow-up turns.
 - Input/output guardrails gate unsafe or unsupported requests.
 - A judge node evaluates the answer and can route into a self-correction path.
-- The LLM is optional: orchestration, retrieval, guardrails and evaluation still work in zero-cost mode.
+- The LLM is optional: orchestration, retrieval, ranking, guardrails and evaluation still work in zero-cost mode.
         """
     )
 
 st.divider()
 st.caption(
-    "Zero-cost base architecture: Streamlit + LangGraph + scikit-learn constraint-aware hybrid vector retrieval + synthetic product/review data. "
+    "Zero-cost base architecture: Streamlit + LangGraph + scikit-learn hybrid vector retrieval + synthetic product/review data. "
     "Gemini is optional; no paid API is required for the live demo."
 )
