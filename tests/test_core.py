@@ -1,14 +1,14 @@
 from src.data import load_products, load_reviews
-from src.evaluation import groundedness_score
-from src.graph import ask_victoria, route_intent
+from src.evaluation import groundedness_score, retrieval_summary
+from src.graph import RETRIEVER, ask_victoria, route_intent
 from src.guardrails import check_input, redact_pii
 from src.intelligence import summarize_reviews
 from src.retrieval import extract_constraints
 
 
 def test_data_loads():
-    assert len(load_products()) >= 8
-    assert len(load_reviews()) >= 50
+    assert len(load_products()) == 40
+    assert len(load_reviews()) == 800
 
 
 def test_constraints():
@@ -23,7 +23,7 @@ def test_review_summary():
     reviews = load_reviews()
     pid = products.iloc[0]["product_id"]
     s = summarize_reviews(reviews[reviews["product_id"] == pid])
-    assert s["review_count"] > 0
+    assert s["review_count"] == 20
     assert s["average_rating"] > 0
 
 
@@ -32,6 +32,23 @@ def test_router():
     assert route_intent("What do customers say about fit?") == "review"
     assert route_intent("Compare these products") == "comparison"
     assert route_intent("What material is the AirFlex Yoga Bra made from?") == "product"
+
+
+def test_hybrid_vector_retrieval():
+    hits = RETRIEVER.search_products(
+        "soft black yoga bra under 2000",
+        top_k=5,
+        max_price=2000,
+        color="black",
+        category="Sports Bra",
+    )
+    assert not hits.empty
+    assert "semantic_score" in hits.columns
+    assert "lexical_score" in hits.columns
+    assert "AV1001" in hits["product_id"].tolist()
+    summary = retrieval_summary(RETRIEVER, top_k=3)
+    assert 0.0 <= summary["recall@3"] <= 1.0
+    assert 0.0 <= summary["top_1_accuracy"] <= 1.0
 
 
 def test_guardrails_block_prompt_injection_and_medical_claims():
