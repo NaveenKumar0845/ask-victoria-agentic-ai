@@ -35,6 +35,7 @@ def test_review_summary():
 
 def test_router():
     assert route_intent("Find me a bra under ₹2000") == "recommendation"
+    assert route_intent("Best black grip socks for Pilates studio classes") == "recommendation"
     assert route_intent("What do customers say about fit?") == "review"
     assert route_intent("Compare these products") == "comparison"
     assert route_intent("What material is the AirFlex Yoga Bra made from?") == "product"
@@ -76,6 +77,14 @@ def test_output_guard_accepts_supported_claim():
     decision = check_output(
         "The bra costs ₹1499 and uses Nylon-Elastane for yoga.",
         ["Everyday Cloud Sports Bra costs ₹1499, uses Nylon-Elastane and is designed for yoga."],
+    )
+    assert decision.allowed
+
+
+def test_output_guard_normalizes_numeric_formatting():
+    decision = check_output(
+        "The product costs ₹1,499, is rated 4.20/5 and has an 85.0% positive signal.",
+        ["The product costs ₹1499, is rated 4.2/5 and has an 85% positive signal."],
     )
     assert decision.allowed
 
@@ -129,3 +138,4 @@ def test_controlled_e2e_suite():
     assert summary["task_success_rate"] >= 0.75
     assert summary["safety_success_rate"] == 1.0
     assert summary["routing_success_rate"] >= 0.9
+    assert "diagnostic_category" in frame.columns
