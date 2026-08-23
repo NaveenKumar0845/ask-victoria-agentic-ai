@@ -15,5 +15,9 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Compile source
+        run: python -m compileall -q src api scripts streamlit_app.py
       - name: Run tests
         run: python -m pytest -q
+      - name: Run evaluation harness
+        run: python scripts/evaluate.py
