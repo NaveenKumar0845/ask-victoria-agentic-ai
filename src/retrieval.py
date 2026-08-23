@@ -14,13 +14,17 @@ SYNONYM_EXPANSIONS = {
     "comfortable": "soft comfort relaxed easy wear",
     "comfort": "soft relaxed easy wear",
     "yoga": "studio stretching pilates low impact",
+    "pilates": "studio stretching yoga low impact",
     "gym": "training workout strength fitness",
+    "strength": "training gym stable secure support",
     "running": "run cardio lightweight breathable",
     "run small": "small tight snug sizing size up",
     "runs small": "small tight snug sizing size up",
     "supportive": "support secure stable compression",
     "breathable": "airflow mesh lightweight fabric",
     "lounge": "relaxed soft everyday travel recovery",
+    "travel": "everyday lounge relaxed walking",
+    "recovery": "cushioned soft relaxed post workout",
 }
 
 
@@ -30,6 +34,17 @@ def expand_query(query: str) -> str:
         if phrase in expanded:
             expanded += " " + synonyms
     return expanded
+
+
+def _tokens(text: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]+", str(text).lower()) if len(t) > 1}
+
+
+def _field_overlap(query_tokens: set[str], value: str) -> float:
+    value_tokens = _tokens(value)
+    if not value_tokens:
+        return 0.0
+    return len(query_tokens & value_tokens) / len(value_tokens)
 
 
 class HybridVectorIndex:
@@ -51,7 +66,12 @@ class HybridVectorIndex:
         self.svd = TruncatedSVD(n_components=max_valid, random_state=42)
         self.dense_matrix = normalize(self.svd.fit_transform(self.lexical_matrix))
 
-    def scores(self, query: str, lexical_weight: float = 0.45, semantic_weight: float = 0.55) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def scores(
+        self,
+        query: str,
+        lexical_weight: float = 0.45,
+        semantic_weight: float = 0.55,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         q = self.vectorizer.transform([expand_query(query)])
         lexical = cosine_similarity(q, self.lexical_matrix).ravel()
         q_dense = normalize(self.svd.transform(q))
@@ -77,7 +97,30 @@ class RetailRetriever:
 
     @property
     def retrieval_mode(self) -> str:
-        return "Hybrid vector retrieval: TF-IDF + dense LSA embeddings"
+        return "Constraint-aware hybrid retrieval: TF-IDF + dense LSA vectors + structured reranking"
+
+    def _structured_product_scores(self, query: str) -> np.ndarray:
+        """Lightweight field-aware reranker on top of vector similarity.
+
+        It rewards explicit matches in high-value commerce fields (name, category,
+        color, material, support, padding) without replacing semantic retrieval.
+        """
+        query_tokens = _tokens(expand_query(query))
+        scores: list[float] = []
+        for _, row in self.products.iterrows():
+            name_score = _field_overlap(query_tokens, row.get("name", ""))
+            attribute_score = np.mean(
+                [
+                    _field_overlap(query_tokens, row.get("category", "")),
+                    _field_overlap(query_tokens, row.get("color", "")),
+                    _field_overlap(query_tokens, row.get("material", "")),
+                    _field_overlap(query_tokens, row.get("support", "")),
+                    _field_overlap(query_tokens, row.get("padding", "")),
+                ]
+            )
+            description_score = _field_overlap(query_tokens, row.get("description", ""))
+            scores.append(0.30 * name_score + 0.45 * attribute_score + 0.25 * description_score)
+        return np.asarray(scores, dtype=float)
 
     def search_products(
         self,
@@ -87,11 +130,22 @@ class RetailRetriever:
         color: str | None = None,
         category: str | None = None,
     ) -> pd.DataFrame:
+        # Infer structured shopping constraints here so the retriever behaves the same
+        # whether called directly by evaluation or through an agent tool.
+        inferred = extract_constraints(query)
+        max_price = max_price if max_price is not None else inferred["max_price"]
+        color = color if color is not None else inferred["color"]
+        category = category if category is not None else inferred["category"]
+
         hybrid, lexical, semantic = self.product_index.scores(query)
+        structured = self._structured_product_scores(query)
+
         result = self.products.copy()
-        result["score"] = hybrid
+        result["vector_score"] = hybrid
         result["lexical_score"] = lexical
         result["semantic_score"] = semantic
+        result["structured_score"] = structured
+        result["score"] = 0.78 * hybrid + 0.22 * structured
 
         if max_price is not None:
             result = result[result["price"] <= max_price]
@@ -115,7 +169,7 @@ class RetailRetriever:
 
 def extract_constraints(query: str) -> dict:
     text = query.lower()
-    price_match = re.search(r"(?:under|below|less than|<)\s*₹?\s*([0-9]+)", text)
+    price_match = re.search(r"(?:under|below|less than|<)\s*₹?\s*([0-9][0-9,]*)", text)
     color = next((c for c in ["black", "white", "navy", "mauve", "pink"] if c in text), None)
     category = None
     if "bra" in text:
@@ -134,8 +188,13 @@ def extract_constraints(query: str) -> dict:
         category = "Sleepwear"
     elif "sock" in text or "tote" in text or "headband" in text or "sling" in text:
         category = "Accessories"
+
+    max_price = None
+    if price_match:
+        max_price = float(price_match.group(1).replace(",", ""))
+
     return {
-        "max_price": float(price_match.group(1)) if price_match else None,
+        "max_price": max_price,
         "color": color,
         "category": category,
     }
