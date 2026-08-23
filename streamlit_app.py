@@ -4,8 +4,8 @@ import pandas as pd
 import streamlit as st
 
 from src.data import load_products, load_reviews
-from src.evaluation import ROUTER_TESTS, evaluate_router
-from src.graph import ask_victoria, route_intent
+from src.evaluation import ROUTER_TESTS, evaluate_retrieval, evaluate_router, retrieval_summary
+from src.graph import RETRIEVER, ask_victoria, route_intent
 from src.guardrails import check_input
 from src.intelligence import summarize_reviews
 from src.llm import DEFAULT_MODEL
@@ -27,7 +27,7 @@ st.markdown(
 
 st.markdown(
     '<div class="hero"><h1>✨ Ask Victoria</h1><p><b>Agentic Product Intelligence & Conversational Commerce Platform</b></p>'
-    '<p class="small">LangGraph routing • product + review tools • grounded RAG • memory • guardrails • judge/self-correction • evaluation</p>'
+    '<p class="small">LangGraph routing • hybrid vector retrieval • product + review tools • memory • guardrails • judge/self-correction • evaluation</p>'
     '<p class="small">Independent portfolio demo using synthetic retail data. Not affiliated with Victoria\'s Secret.</p></div>',
     unsafe_allow_html=True,
 )
@@ -52,12 +52,18 @@ with st.sidebar:
     m1, m2 = st.columns(2)
     m1.metric("Price", f"₹{int(p['price'])}")
     m2.metric("Rating", f"{summary['average_rating']} / 5")
-    st.caption(f"{summary['review_count']} synthetic demo reviews")
+    st.caption(f"{summary['review_count']} synthetic demo reviews for this product")
     st.write(f"**Category:** {p['category']}")
     st.write(f"**Color:** {p['color']}")
     st.write(f"**Material:** {p['material']}")
     st.write(f"**Support:** {p['support']}")
     st.write(f"**Padding:** {p['padding']}")
+    st.divider()
+    st.caption("Knowledge base")
+    k1, k2 = st.columns(2)
+    k1.metric("Products", len(products))
+    k2.metric("Reviews", len(reviews))
+    st.caption(RETRIEVER.retrieval_mode)
     st.divider()
     try:
         gemini_key = st.secrets.get("GEMINI_API_KEY", "")
@@ -107,7 +113,7 @@ with assistant_tab:
 
     with right:
         st.subheader("Ask the shopping assistant")
-        st.caption("Try a recommendation, review question, comparison, or follow-up such as ‘Does it run small?’")
+        st.caption("Try a recommendation, review question, comparison, or follow-up such as ‘What material is it made from?’")
 
         prompts = [
             "Find me a black sports bra under ₹2000 for yoga",
@@ -156,6 +162,7 @@ with assistant_tab:
                 q4.metric("Latency", f"{result.get('latency_ms', 0):.0f} ms")
 
                 with st.expander("Agent execution trace"):
+                    st.caption(RETRIEVER.retrieval_mode)
                     for step, trace in enumerate(result.get("trace", []), start=1):
                         st.write(f"**{step}.** {trace}")
                     if result.get("selected_product_ids"):
@@ -165,19 +172,29 @@ with assistant_tab:
             st.rerun()
 
 with eval_tab:
-    st.subheader("Zero-cost evaluation harness")
+    st.subheader("Transparent evaluation harness")
     st.write(
-        "The portfolio version exposes measurable routing and safety behavior instead of claiming unverified performance. "
+        "The portfolio version exposes measurable routing, retrieval and safety behavior instead of claiming unverified performance. "
         "The groundedness score shown in the demo is a transparent lexical proxy, not a production factuality benchmark."
     )
 
     router_df = evaluate_router(route_intent)
     routing_accuracy = float(router_df["correct"].mean()) if len(router_df) else 0.0
-    a, b, c = st.columns(3)
-    a.metric("Router test accuracy", f"{routing_accuracy:.0%}")
-    b.metric("Router test cases", len(ROUTER_TESTS))
-    c.metric("Safety policies", "3 layers")
+    retrieval_df = evaluate_retrieval(RETRIEVER, top_k=3)
+    retrieval_metrics = retrieval_summary(RETRIEVER, top_k=3)
+
+    a, b, c, d = st.columns(4)
+    a.metric("Router accuracy", f"{routing_accuracy:.0%}")
+    b.metric("Retrieval Recall@3", f"{retrieval_metrics['recall@3']:.0%}")
+    c.metric("Retrieval Top-1", f"{retrieval_metrics['top_1_accuracy']:.0%}")
+    d.metric("Safety layers", "3")
+
+    st.markdown("#### Router evaluation")
     st.dataframe(router_df, hide_index=True, use_container_width=True)
+
+    st.markdown("#### Hybrid vector retrieval evaluation")
+    st.caption(RETRIEVER.retrieval_mode)
+    st.dataframe(retrieval_df, hide_index=True, use_container_width=True)
 
     st.markdown("#### Adversarial / safety checks")
     safety_queries = [
@@ -229,6 +246,10 @@ Product Agent   Review Agent   Recommendation / Comparison Agent
  │       │                       │
  └───────┴──────────┬────────────┘
                     ▼
+        Hybrid Vector Retrieval
+         TF-IDF + Dense LSA
+                    │
+                    ▼
             Product + Review Tools
                     │
                     ▼
@@ -253,6 +274,7 @@ Product Agent   Review Agent   Recommendation / Comparison Agent
 
 - Conditional LangGraph routing chooses a workflow from user intent.
 - Specialized agents call product/review intelligence tools rather than relying on model memory.
+- Hybrid retrieval combines lexical relevance with dense latent-semantic vector similarity.
 - Session state carries active-product context into follow-up turns.
 - Input/output guardrails gate unsafe or unsupported requests.
 - A judge node evaluates the answer and can route into a self-correction path.
@@ -262,6 +284,6 @@ Product Agent   Review Agent   Recommendation / Comparison Agent
 
 st.divider()
 st.caption(
-    "Zero-cost base architecture: Streamlit + LangGraph + scikit-learn retrieval + synthetic product/review data. "
+    "Zero-cost base architecture: Streamlit + LangGraph + scikit-learn hybrid vector retrieval + synthetic product/review data. "
     "Gemini is optional; no paid API is required for the live demo."
 )
