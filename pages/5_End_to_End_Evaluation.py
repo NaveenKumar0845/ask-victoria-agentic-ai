@@ -6,20 +6,20 @@ from src.e2e_evaluation import E2E_CASES, evaluate_end_to_end
 from src.graph import ask_victoria
 
 
+BUILD_ID = "2026-08-23-e2e-r3"
+
 st.set_page_config(page_title="Ask Victoria · End-to-End Evaluation", page_icon="🧪", layout="wide")
 st.title("🧪 End-to-End Agent Evaluation")
 st.caption(
     "Controlled evaluation across routing, product selection, safety behavior, answer completion, grounding, retries and latency."
 )
+st.caption(f"Build: `{BUILD_ID}` · benchmark is recomputed fresh on every page run")
 
+if st.button("↻ Run benchmark again", use_container_width=False):
+    st.rerun()
 
-@st.cache_data(ttl=600, show_spinner="Running the controlled agent benchmark…")
-def run_benchmark():
+with st.spinner("Running the controlled agent benchmark…"):
     frame, summary, _ = evaluate_end_to_end(ask_victoria)
-    return frame, summary
-
-
-frame, summary = run_benchmark()
 
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Task success", f"{summary['task_success_rate']:.0%}")
@@ -51,9 +51,31 @@ else:
         "answer",
         "grounded",
         "intent",
+        "diagnostic_category",
         "selected_products",
     ]
-    st.dataframe(failures[failure_columns], hide_index=True, use_container_width=True)
+    available_columns = [column for column in failure_columns if column in failures.columns]
+    st.dataframe(failures[available_columns], hide_index=True, use_container_width=True)
+
+retry_cases = frame[frame["retry_count"] > 0]
+st.markdown("### Retry / self-correction analysis")
+if retry_cases.empty:
+    st.success("No benchmark case required the self-correction path in this run.")
+else:
+    retry_columns = [
+        "case",
+        "intent",
+        "diagnostic_category",
+        "retry_count",
+        "groundedness",
+        "latency_ms",
+        "selected_products",
+    ]
+    available_retry_columns = [column for column in retry_columns if column in retry_cases.columns]
+    st.dataframe(retry_cases[available_retry_columns], hide_index=True, use_container_width=True)
+    st.caption(
+        "A retry is not automatically a task failure. It means the Judge rejected the first draft and the LangGraph self-correction path produced the final safe response."
+    )
 
 st.markdown("### Benchmark coverage")
 coverage_rows = []
