@@ -59,8 +59,28 @@ def _query_refers_to_context(query: str) -> bool:
 
 
 def route_intent(query: str) -> Literal["recommendation", "comparison", "review", "product"]:
-    q = query.lower()
-    if any(k in q for k in ["recommend", "find me", "looking for", "under ₹", "below ₹", "best option"]):
+    q = query.lower().strip()
+    recommendation_phrases = [
+        "recommend",
+        "find me",
+        "looking for",
+        "under ₹",
+        "below ₹",
+        "best option",
+        "best product",
+        "best bra",
+        "best leggings",
+        "best shoes",
+        "best trainer",
+        "best tee",
+        "best shorts",
+        "best jacket",
+        "best socks",
+        "best tote",
+        "best headband",
+        "best sling",
+    ]
+    if q.startswith("best ") or any(k in q for k in recommendation_phrases):
         return "recommendation"
     if any(k in q for k in ["compare", "versus", " vs ", "which of", "difference between"]):
         return "comparison"
