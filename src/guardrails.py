@@ -78,8 +78,36 @@ def _meaningful_tokens(text: str) -> set[str]:
     }
 
 
+def _canonical_number_claim(match: str) -> str:
+    """Normalize harmless presentation differences before evidence comparison.
+
+    Examples:
+      ₹1,499 == ₹1499
+      4.20/5 == 4.2/5
+      85.0% == 85%
+    """
+    raw = re.sub(r"[\s,*_]", "", match).lower()
+    if raw.startswith("₹"):
+        try:
+            return f"₹{float(raw[1:]):g}"
+        except ValueError:
+            return raw
+
+    suffix = ""
+    value = raw
+    for candidate in ("/100", "/5", "%"):
+        if raw.endswith(candidate):
+            suffix = candidate
+            value = raw[: -len(candidate)]
+            break
+    try:
+        return f"{float(value):g}{suffix}"
+    except ValueError:
+        return raw
+
+
 def _normalized_claim_numbers(text: str) -> set[str]:
-    return {re.sub(r"\s+", "", match).lower() for match in CLAIM_NUMBER_RE.findall(text)}
+    return {_canonical_number_claim(match) for match in CLAIM_NUMBER_RE.findall(text)}
 
 
 def _support_ratio(answer: str, evidence: list[str]) -> float:
@@ -98,8 +126,8 @@ def check_output(answer: str, evidence: list[str]) -> GuardrailDecision:
         return GuardrailDecision(False, "no_evidence", "No supporting product or review evidence was retrieved.")
 
     # Numeric claims are especially risky in commerce because a hallucinated price,
-    # rating or score can directly change a purchase decision. Require every explicit
-    # numeric claim in the answer to appear in the retrieved evidence.
+    # rating or score can directly change a purchase decision. Every explicit numeric
+    # claim must be present in retrieved evidence, after harmless formatting is normalized.
     answer_numbers = _normalized_claim_numbers(answer)
     evidence_numbers = _normalized_claim_numbers(" ".join(evidence))
     unsupported_numbers = answer_numbers - evidence_numbers
@@ -110,8 +138,8 @@ def check_output(answer: str, evidence: list[str]) -> GuardrailDecision:
             "The generated answer contains a price, rating, percentage or score that is not present in the retrieved evidence.",
         )
 
-    # Lightweight deterministic grounding gate. This is intentionally conservative
-    # and transparent; it is not presented as a production factuality model.
+    # Lightweight deterministic grounding gate. This remains intentionally conservative
+    # and transparent; it is a portfolio proxy rather than a production factuality model.
     support = _support_ratio(answer, evidence)
     if support < 0.12:
         return GuardrailDecision(
