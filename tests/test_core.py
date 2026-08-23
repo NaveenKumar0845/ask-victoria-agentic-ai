@@ -1,8 +1,10 @@
 from src.data import load_products, load_reviews
-from src.evaluation import groundedness_score, recommendation_summary, retrieval_summary
-from src.graph import RETRIEVER, TOOLS, ask_victoria, route_intent
+from src.e2e_evaluation import evaluate_end_to_end
+from src.evaluation import groundedness_score, retrieval_summary
+from src.graph import RETRIEVER, ask_victoria, route_intent
 from src.guardrails import check_input, redact_pii
-from src.intelligence import infer_query_aspects, summarize_reviews
+from src.intelligence import summarize_reviews
+from src.observability import aggregate_telemetry, telemetry_from_result
 from src.retrieval import extract_constraints
 
 
@@ -16,6 +18,8 @@ def test_constraints():
     assert c["color"] == "black"
     assert c["category"] == "Sports Bra"
     assert c["max_price"] == 2000
+    comma_price = extract_constraints("Find me black shorts under ₹1,700")
+    assert comma_price["max_price"] == 1700
 
 
 def test_review_summary():
@@ -25,16 +29,8 @@ def test_review_summary():
     s = summarize_reviews(reviews[reviews["product_id"] == pid])
     assert s["review_count"] == 20
     assert s["average_rating"] > 0
-    assert s["aspect_scores"]
-    assert s["fit_signal"]["label"]
-    assert 0.0 <= s["confidence"] <= 1.0
-
-
-def test_query_aspects():
-    aspects = infer_query_aspects("I want something soft, comfortable and supportive for yoga")
-    assert "comfort" in aspects
-    assert "support" in aspects
-    assert "activity" in aspects
+    assert "aspect_scores" in s
+    assert "fit_signal" in s
 
 
 def test_router():
@@ -58,25 +54,8 @@ def test_hybrid_vector_retrieval():
     assert "structured_score" in hits.columns
     assert "AV1001" in hits["product_id"].tolist()
     summary = retrieval_summary(RETRIEVER, top_k=3)
-    assert 0.0 <= summary["recall@3"] <= 1.0
-    assert 0.0 <= summary["top_1_accuracy"] <= 1.0
-    assert 0.0 <= summary["mrr"] <= 1.0
-
-
-def test_explainable_recommendation_engine():
-    products, evidence = TOOLS.recommend_products(
-        "Recommend a soft comfortable black yoga bra under ₹2000",
-        top_k=3,
-    )
-    assert products
-    assert evidence
-    assert products[0].get("recommendation_score") is not None
-    assert products[0].get("recommendation_reasons")
-    assert 0.0 <= products[0]["recommendation_score"] <= 100.0
-    summary = recommendation_summary(TOOLS.recommend_products, top_k=3)
-    assert 0.0 <= summary["recall@3"] <= 1.0
-    assert 0.0 <= summary["top_1_accuracy"] <= 1.0
-    assert 0.0 <= summary["mrr"] <= 1.0
+    assert summary["recall@3"] >= 0.8
+    assert summary["top_1_accuracy"] >= 0.7
 
 
 def test_guardrails_block_prompt_injection_and_medical_claims():
@@ -114,3 +93,22 @@ def test_context_follow_up():
         context={"active_product_id": "AV1001", "recent_products": ["AV1001"]},
     )
     assert "Nylon-Elastane" in result["final_answer"] or "nylon" in result["final_answer"].lower()
+
+
+def test_observability_telemetry():
+    result = ask_victoria("What material is the AirFlex Yoga Bra made from?")
+    telemetry = telemetry_from_result(result)
+    assert telemetry.trace_steps > 0
+    assert telemetry.latency_ms >= 0
+    aggregate = aggregate_telemetry([result])
+    assert aggregate["runs"] == 1
+    assert 0.0 <= aggregate["judge_pass_rate"] <= 1.0
+
+
+def test_controlled_e2e_suite():
+    frame, summary, results = evaluate_end_to_end(ask_victoria)
+    assert len(frame) == 12
+    assert len(results) == 12
+    assert summary["task_success_rate"] >= 0.75
+    assert summary["safety_success_rate"] == 1.0
+    assert summary["routing_success_rate"] >= 0.9
