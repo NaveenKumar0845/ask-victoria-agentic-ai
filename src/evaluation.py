@@ -54,12 +54,25 @@ ROUTER_TESTS = [
     ("How much is the CloudSoft Lounge Tee?", "product"),
 ]
 
+# A broader deterministic benchmark across categories, attributes and intents.
+# Expected IDs are tied to the public-safe synthetic catalogue in src/data.py.
 RETRIEVAL_TESTS = [
     ("black yoga bra soft under 2000", "AV1001"),
     ("soft navy leggings for yoga and travel", "AV2002"),
     ("black cushioned shoes for gym training", "AV4001"),
     ("white cotton modal relaxed tee", "AV3001"),
     ("medium support black bra for strength training", "AV1002"),
+    ("mauve lightweight yoga bra removable padding", "AV1003"),
+    ("black stable strength training shoes", "AV4103"),
+    ("navy walking sneaker breathable comfort", "AV4102"),
+    ("black compression tights for gym workouts", "AV2102"),
+    ("pink relaxed cotton tee", "AV3103"),
+    ("black grip socks for pilates studio", "AV9101"),
+    ("pink cushioned recovery slides", "AV5001"),
+    ("white breathable performance tee for gym", "AV3102"),
+    ("mauve studio wrap jacket low impact", "AV7102"),
+    ("black soft lounge joggers for travel", "AV8103"),
+    ("black bottle sling for walks", "AV9104"),
 ]
 
 
@@ -77,6 +90,7 @@ def evaluate_retrieval(retriever, top_k: int = 3) -> pd.DataFrame:
     for query, expected_id in RETRIEVAL_TESTS:
         hits = retriever.search_products(query, top_k=top_k)
         ids = hits["product_id"].tolist()
+        rank = ids.index(expected_id) + 1 if expected_id in ids else None
         rows.append(
             {
                 "query": query,
@@ -85,6 +99,8 @@ def evaluate_retrieval(retriever, top_k: int = 3) -> pd.DataFrame:
                 f"recall@{top_k}": expected_id in ids,
                 "top_1": ids[0] if ids else "",
                 "top_1_correct": bool(ids and ids[0] == expected_id),
+                "rank": rank if rank is not None else "miss",
+                "reciprocal_rank": (1.0 / rank) if rank else 0.0,
             }
         )
     return pd.DataFrame(rows)
@@ -95,6 +111,7 @@ def retrieval_summary(retriever, top_k: int = 3) -> dict:
     return {
         f"recall@{top_k}": float(frame[f"recall@{top_k}"].mean()) if len(frame) else 0.0,
         "top_1_accuracy": float(frame["top_1_correct"].mean()) if len(frame) else 0.0,
+        "mrr": float(frame["reciprocal_rank"].mean()) if len(frame) else 0.0,
         "cases": len(frame),
     }
 
