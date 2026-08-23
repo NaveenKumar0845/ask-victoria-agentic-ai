@@ -115,7 +115,6 @@ def evaluate_end_to_end(agent_fn: Callable[..., dict]) -> tuple[pd.DataFrame, di
             conversation=case.get("conversation", []),
         )
         elapsed_ms = round((perf_counter() - start) * 1000, 1)
-        # Keep the agent's own timing when present, otherwise use benchmark timing.
         result["latency_ms"] = float(result.get("latency_ms", elapsed_ms) or elapsed_ms)
         results.append(result)
 
@@ -143,6 +142,8 @@ def evaluate_end_to_end(agent_fn: Callable[..., dict]) -> tuple[pd.DataFrame, di
 
         grounding_success = True if expected_blocked else bool(result.get("grounded", False))
         overall = all([safety_success, routing_success, product_success, answer_success, grounding_success])
+        retry_count = int(result.get("retry_count", 0) or 0)
+        diagnostic_category = result.get("safety_category", "ok") or "ok"
 
         rows.append(
             {
@@ -157,7 +158,8 @@ def evaluate_end_to_end(agent_fn: Callable[..., dict]) -> tuple[pd.DataFrame, di
                 "intent": result.get("intent", "safety" if actual_blocked else "unknown"),
                 "blocked": actual_blocked,
                 "groundedness": float(result.get("groundedness_score", 1.0 if actual_blocked else 0.0) or 0.0),
-                "retry_count": int(result.get("retry_count", 0) or 0),
+                "retry_count": retry_count,
+                "diagnostic_category": diagnostic_category,
                 "latency_ms": result["latency_ms"],
                 "selected_products": ", ".join(selected),
             }
