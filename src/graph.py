@@ -140,16 +140,18 @@ def review_node(state: AgentState) -> AgentState:
 
 def recommendation_node(state: AgentState) -> AgentState:
     query = state.get("sanitized_query", state["query"])
-    products, product_evidence = TOOLS.search_products(query, top_k=5)
+    products, recommendation_evidence = TOOLS.recommend_products(query, top_k=5)
     product_ids = [p["product_id"] for p in products]
     review_evidence = TOOLS.review_intelligence(query, product_ids[:3], top_k=8) if product_ids else []
+    top_score = products[0].get("recommendation_score") if products else None
+    score_text = f"; top explainable score={top_score}/100" if top_score is not None else ""
     return {
         "products": products,
         "selected_product_ids": product_ids,
-        "evidence": [*product_evidence, *review_evidence],
+        "evidence": [*recommendation_evidence, *review_evidence],
         "trace": _trace(
             state,
-            f"Recommendation Agent called product + review tools for {len(product_ids)} candidates",
+            f"Recommendation Agent ranked {len(product_ids)} candidates using retrieval + review aspects + rating + confidence + value{score_text}",
         ),
     }
 
@@ -161,7 +163,7 @@ def comparison_node(state: AgentState) -> AgentState:
         "products": products,
         "selected_product_ids": [p["product_id"] for p in products],
         "evidence": evidence,
-        "trace": _trace(state, f"Comparison Agent assembled evidence for {len(products)} products"),
+        "trace": _trace(state, f"Comparison Agent assembled product + aspect-level review evidence for {len(products)} products"),
     }
 
 
@@ -178,6 +180,7 @@ def answer_node(state: AgentState) -> AgentState:
     prompt = (
         "You are Ask Victoria, an objective retail shopping assistant. Answer ONLY from the supplied evidence. "
         "Never invent sizes, inventory, health claims, product specifications or customer claims. "
+        "For recommendations, explain the most important ranking reasons without presenting the score as a universal truth. "
         "Clearly distinguish official product facts from customer-review evidence. If evidence is insufficient, say so.\n\n"
         f"Intent: {state.get('intent')}\n"
         f"Question: {state.get('sanitized_query', state['query'])}\n"
@@ -197,15 +200,23 @@ def deterministic_answer(state: AgentState) -> str:
     products = state.get("products", [])
     evidence = state.get("evidence", [])
     if intent == "recommendation" and products:
-        lines = ["I found these strong matches based on your constraints and the available product/review evidence:"]
-        for p in products[:3]:
-            lines.append(f"- **{p['name']}** — ₹{int(p['price'])}, {p['color']}, {p['support']}. {p['description']}")
-        lines.append("I can compare comfort, fit, support or customer feedback for these options next.")
+        lines = ["I ranked the strongest matches using product relevance plus customer-review evidence:"]
+        for idx, p in enumerate(products[:3], start=1):
+            score = p.get("recommendation_score")
+            score_text = f" · match score **{float(score):.1f}/100**" if score is not None else ""
+            reasons = p.get("recommendation_reasons", [])[:2]
+            reason_text = "; ".join(reasons)
+            lines.append(
+                f"{idx}. **{p['name']}** — ₹{int(p['price'])}, {p['color']}, {p['support']}{score_text}. "
+                f"{p['description']}"
+                + (f" Review rationale: {reason_text}." if reason_text else "")
+            )
+        lines.append("The score is an explainable ranking within this retrieved candidate set, not a universal product-quality score.")
         return "\n".join(lines)
     if intent == "comparison" and evidence:
         return "Here is the evidence-based comparison:\n\n" + "\n\n".join(f"- {e}" for e in evidence[:3])
     if intent == "review" and evidence:
-        return "Based on the available customer-review evidence:\n\n" + "\n\n".join(f"- {e}" for e in evidence[:5])
+        return "Based on the available aspect-level customer-review evidence:\n\n" + "\n\n".join(f"- {e}" for e in evidence[:7])
     if products:
         p = products[0]
         return (
