@@ -75,6 +75,19 @@ RETRIEVAL_TESTS = [
     ("black bottle sling for walks", "AV9104"),
 ]
 
+# Recommendation tests intentionally emphasize review-sensitive language such as
+# comfort/support/fit in addition to catalogue attributes.
+RECOMMENDATION_TESTS = [
+    ("Recommend a soft comfortable black yoga bra under ₹2000", "AV1001"),
+    ("Best supportive black sports bra for strength training under ₹2000", "AV1002"),
+    ("Recommend soft navy leggings for yoga and travel", "AV2002"),
+    ("Best stable black training shoes for strength work", "AV4103"),
+    ("Recommend a breathable white gym tee", "AV3102"),
+    ("Best cushioned pink slides for recovery", "AV5001"),
+    ("Recommend soft black lounge joggers for travel", "AV8103"),
+    ("Best black grip socks for Pilates studio classes", "AV9101"),
+]
+
 
 def evaluate_router(route_fn: Callable[[str], str]) -> pd.DataFrame:
     return pd.DataFrame(
@@ -108,6 +121,45 @@ def evaluate_retrieval(retriever, top_k: int = 3) -> pd.DataFrame:
 
 def retrieval_summary(retriever, top_k: int = 3) -> dict:
     frame = evaluate_retrieval(retriever, top_k=top_k)
+    return {
+        f"recall@{top_k}": float(frame[f"recall@{top_k}"].mean()) if len(frame) else 0.0,
+        "top_1_accuracy": float(frame["top_1_correct"].mean()) if len(frame) else 0.0,
+        "mrr": float(frame["reciprocal_rank"].mean()) if len(frame) else 0.0,
+        "cases": len(frame),
+    }
+
+
+def evaluate_recommendations(recommend_fn: Callable[[str, int], tuple[list[dict], list[str]]], top_k: int = 3) -> pd.DataFrame:
+    rows = []
+    for query, expected_id in RECOMMENDATION_TESTS:
+        products, _ = recommend_fn(query, top_k)
+        ids = [p.get("product_id", "") for p in products]
+        rank = ids.index(expected_id) + 1 if expected_id in ids else None
+        top_score = products[0].get("recommendation_score") if products else None
+        expected_score = None
+        for product in products:
+            if product.get("product_id") == expected_id:
+                expected_score = product.get("recommendation_score")
+                break
+        rows.append(
+            {
+                "query": query,
+                "expected_product": expected_id,
+                "top_k": ", ".join(ids),
+                f"recall@{top_k}": expected_id in ids,
+                "top_1": ids[0] if ids else "",
+                "top_1_correct": bool(ids and ids[0] == expected_id),
+                "rank": rank if rank is not None else "miss",
+                "reciprocal_rank": (1.0 / rank) if rank else 0.0,
+                "top_score": top_score,
+                "expected_score": expected_score,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def recommendation_summary(recommend_fn: Callable[[str, int], tuple[list[dict], list[str]]], top_k: int = 3) -> dict:
+    frame = evaluate_recommendations(recommend_fn, top_k=top_k)
     return {
         f"recall@{top_k}": float(frame[f"recall@{top_k}"].mean()) if len(frame) else 0.0,
         "top_1_accuracy": float(frame["top_1_correct"].mean()) if len(frame) else 0.0,
