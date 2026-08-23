@@ -8,21 +8,21 @@ from src.graph import ask_victoria
 from src.observability import telemetry_from_result, trace_stage_counts
 
 
+BUILD_ID = "2026-08-23-observability-r3"
+
 st.set_page_config(page_title="Ask Victoria · Observability", page_icon="📡", layout="wide")
 st.title("📡 Agent Observability")
 st.caption(
     "Transparent runtime telemetry for the controlled portfolio environment. "
     "No external paid observability service is required."
 )
+st.caption(f"Build: `{BUILD_ID}` · telemetry is recomputed fresh on every page run")
 
+if st.button("↻ Refresh telemetry", use_container_width=False):
+    st.rerun()
 
-@st.cache_data(ttl=600, show_spinner=False)
-def benchmark_snapshot():
+with st.spinner("Running fresh benchmark telemetry…"):
     frame, summary, results = evaluate_end_to_end(ask_victoria)
-    return frame, summary, results
-
-
-frame, summary, results = benchmark_snapshot()
 
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Benchmark runs", summary["runs"])
@@ -67,6 +67,9 @@ a.metric("Intent", selected_telemetry.intent)
 b.metric("Evidence", selected_telemetry.evidence_count)
 c.metric("Groundedness", f"{selected_telemetry.groundedness:.0%}")
 d.metric("Latency", f"{selected_telemetry.latency_ms:.0f} ms")
+
+if selected_result.get("safety_category"):
+    st.caption(f"Diagnostic category: `{selected_result.get('safety_category')}`")
 
 for step_number, step in enumerate(selected_result.get("trace", []), start=1):
     st.write(f"**{step_number}.** {step}")
